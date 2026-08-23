@@ -9,10 +9,10 @@ GROQ_MODELS = [
 ]
 
 GEMINI_MODELS = [
-    "gemma-4-26b-a4b-it",
-    "gemma-4-31b-it",
     "gemini-3.5-flash-lite",
     "gemini-3.6-flash",
+    "gemma-4-26b-a4b-it",
+    "gemma-4-31b-it",
 ]
 
 
