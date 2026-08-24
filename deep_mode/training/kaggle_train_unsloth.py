@@ -7,7 +7,7 @@ from datasets import load_dataset
 from trl import SFTTrainer
 from transformers import TrainingArguments
 
-MAX_SEQ_LENGTH = 2048
+MAX_SEQ_LENGTH = 1024
 DTYPE = None
 LOAD_IN_4BIT = True
 
@@ -37,7 +37,7 @@ model = FastLanguageModel.get_peft_model(
         "q_proj", "k_proj", "v_proj", "o_proj",
         "gate_proj", "up_proj", "down_proj",
     ],
-    lora_alpha=32,
+    lora_alpha=16,
     lora_dropout=0,
     bias="none",
     use_gradient_checkpointing="unsloth",
@@ -57,7 +57,7 @@ if not os.path.exists(dataset_path):
     dataset_path = "processed_data/train_chatml.jsonl"
 
 dataset = load_dataset("json", data_files={"train": dataset_path}, split="train")
-dataset = dataset.map(formatting_prompts_func, batched=True)
+dataset = dataset.map(formatting_prompts_func, batched=True, num_proc=4)
 
 print(f"Dataset successfully loaded. Total training rows: {len(dataset):,}")
 print("Sample Formatted Prompt:\n" + "=" * 60)
@@ -70,27 +70,28 @@ trainer = SFTTrainer(
     train_dataset=dataset,
     dataset_text_field="text",
     max_seq_length=MAX_SEQ_LENGTH,
-    dataset_num_proc=2,
+    dataset_num_proc=4,
     packing=False,
     args=TrainingArguments(
-        per_device_train_batch_size=2,
-        gradient_accumulation_steps=4,
-        warmup_ratio=0.05,
-        num_train_epochs=2,
+        per_device_train_batch_size=4,
+        gradient_accumulation_steps=2,
+        warmup_ratio=0.03,
+        num_train_epochs=1,
         learning_rate=2e-4,
         fp16=not torch.cuda.is_bf16_supported(),
         bf16=torch.cuda.is_bf16_supported(),
-        logging_steps=25,
+        logging_steps=20,
         optim="adamw_8bit",
         weight_decay=0.01,
         lr_scheduler_type="cosine",
         seed=42,
         output_dir=OUTPUT_DIR,
         report_to="none",
+        group_by_length=True,
     ),
 )
 
-print("\nStarting Fine-Tuning...")
+print("\nStarting Ultra-Fast Fine-Tuning...")
 trainer_stats = trainer.train()
 print(f"Training Complete! Total runtime: {trainer_stats.metrics['train_runtime'] / 60:.2f} minutes.")
 
