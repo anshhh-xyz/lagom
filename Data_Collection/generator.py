@@ -5,17 +5,17 @@ from clients import (
     get_groq_client,
 )
 
+GROQ_MODELS = [
+    "qwen/qwen3.6-27b",
+    "openai/gpt-oss-20b",
+    "openai/gpt-oss-120b",
+]
+
 GEMINI_MODELS = [
     "gemini-3.5-flash-lite",
     "gemini-3.6-flash",
     "gemma-4-26b-a4b-it",
     "gemma-4-31b-it",
-]
-
-GROQ_MODELS = [
-    "openai/gpt-oss-120b",
-    "qwen/qwen3.6-27b",
-    "openai/gpt-oss-20b",
 ]
 
 
@@ -61,14 +61,14 @@ def aiify_groq(text, category, pair_idx=0):
 
 
 def aiify_call(text, category, model="groq", pair_idx=0):
-    providers = [model, "gemini" if model == "groq" else "groq"]
+    providers = ["groq", "gemini"]
     
     for prov in providers:
         try:
-            if prov == "gemini":
-                return aiify_gemini(text, category, pair_idx=pair_idx)
-            elif prov == "groq":
+            if prov == "groq":
                 return aiify_groq(text, category, pair_idx=pair_idx)
+            elif prov == "gemini":
+                return aiify_gemini(text, category, pair_idx=pair_idx)
         except Exception as e:
             err_str = str(e)
             if "RESOURCE_EXHAUSTED" in err_str or "429" in err_str or "exhausted" in err_str.lower() or "unavailable" in err_str.lower():
@@ -76,11 +76,11 @@ def aiify_call(text, category, model="groq", pair_idx=0):
             for attempt in range(2):
                 try:
                     time.sleep(1)
-                    if prov == "gemini":
-                        return aiify_gemini(text, category, pair_idx=pair_idx)
-                    elif prov == "groq":
+                    if prov == "groq":
                         return aiify_groq(text, category, pair_idx=pair_idx)
+                    elif prov == "gemini":
+                        return aiify_gemini(text, category, pair_idx=pair_idx)
                 except Exception:
                     pass
 
-    raise RuntimeError(f"Both Gemini and Groq exhausted/failed on {KEY_PAIRS[pair_idx]['name']}.")
+    raise RuntimeError(f"Both Groq and Gemini exhausted/failed on {KEY_PAIRS[pair_idx]['name']}.")

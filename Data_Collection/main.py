@@ -145,8 +145,6 @@ def run_pipeline():
 
         def worker_loop(pair_idx):
             nonlocal current_cat_completed
-            model_cycle = ["groq", "gemini"]
-            model_i = pair_idx
 
             while not stop_event.is_set():
                 with cat_lock:
@@ -157,17 +155,15 @@ def run_pipeline():
                 except queue.Empty:
                     break
 
-                preferred_model = model_cycle[model_i % len(model_cycle)]
                 ai_text = None
                 used_model_name = None
 
                 try:
                     ai_text, used_model_name = aiify_call(
-                        chunk, category, model=preferred_model, pair_idx=pair_idx
+                        chunk, category, model="groq", pair_idx=pair_idx
                     )
-                    model_i += 1
                 except Exception:
-                    time.sleep(3.0)
+                    time.sleep(2.0)
                     chunk_queue.put(chunk)
                     continue
 
@@ -183,7 +179,7 @@ def run_pipeline():
                         ai_final,
                         chunk,
                         category,
-                        used_model_name or preferred_model,
+                        used_model_name or "groq",
                         len(chunk.split()),
                         "hf_dataset_import",
                         "script",
