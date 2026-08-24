@@ -125,16 +125,18 @@ def run_pipeline():
                     mismatch_file.flush()
 
         remaining_chunks = [c for c in clean_chunks if c.strip() not in already_done]
-        queue_chunks = remaining_chunks[: int(needed * 1.3) + 100]
+        if not remaining_chunks:
+            print(f"[!] Warning: No new chunks remaining for {category}.", flush=True)
+            continue
 
         print(
-            f"\n=== {category.upper()}: {len(queue_chunks)} chunks queued to reach {needed} needed "
+            f"\n=== {category.upper()}: {len(remaining_chunks)} chunks queued to reach {needed} needed "
             f"({completed_in_cat} already completed, Target: {TARGET_ROWS_PER_CATEGORY}) ===",
             flush=True
         )
 
         chunk_queue = queue.Queue()
-        for c in queue_chunks:
+        for c in remaining_chunks:
             chunk_queue.put(c)
 
         pbar = tqdm(total=needed, initial=0, desc=f"{category[:10]:10}")
