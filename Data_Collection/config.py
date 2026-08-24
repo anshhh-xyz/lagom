@@ -5,7 +5,7 @@ MAX_WORDS = 400
 TARGET_ROWS_PER_CATEGORY = 6000
 RATE_LIMIT_SLEEP = 0.02
 
-CATEGORIES = ["general", "essay", "academic", "email", "document"]
+CATEGORIES = ["academic", "document", "email", "general", "essay"]
 
 KEY_PAIRS = [
     {"name": "Pair 1", "gemini_env": "GEMINI_API_KEY",  "groq_env": "GROQ_API_KEY"},

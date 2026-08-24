@@ -74,13 +74,21 @@ def run_pipeline():
     already_done, category_counts = load_already_done_stats(OUTPUT_CSV)
     print("=" * 80, flush=True)
     print(f"Resuming Pipeline: {len(already_done)} unique rows in {OUTPUT_CSV}.", flush=True)
-    for cat, cnt in category_counts.items():
+    for cat in CATEGORIES:
+        cnt = category_counts.get(cat, 0)
         status = "[DONE - Target Reached]" if cnt >= TARGET_ROWS_PER_CATEGORY else f"{cnt}/{TARGET_ROWS_PER_CATEGORY} rows"
         print(f" - {cat:12}: {status}", flush=True)
     print("=" * 80, flush=True)
 
-    print("\nLoading human source datasets...", flush=True)
-    sources = load_human_sources()
+    needed_cats = [c for c in CATEGORIES if category_counts.get(c, 0) < TARGET_ROWS_PER_CATEGORY]
+    if not needed_cats:
+        print("\nAll categories have met or exceeded their 6,000 target!", flush=True)
+        csv_file.close()
+        mismatch_file.close()
+        return
+
+    print(f"\nLoading human source datasets for: {', '.join(needed_cats)}...", flush=True)
+    sources = load_human_sources(target_categories=needed_cats)
 
     num_workers = len(KEY_PAIRS) * 2
     print(f"\n[Parallel Engine] Starting {num_workers} Concurrent Workers (2 per Key Pair across 5 pairs):", flush=True)
