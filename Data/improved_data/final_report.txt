@@ -1,0 +1,32 @@
+Lagom finalization report
+===========================
+
+Input/core rows: 29792
+Semantic-risk rows: 1708
+Final training pool: 28084
+Train: 22467
+Validation: 2808
+Test: 2809
+
+Semantic risk breakdown:
+- SBERT very-low signal (< 0.55): 870
+- SBERT+TF-IDF weak combined signal: 1289
+- NLI contradiction signal (>= 0.5): 167
+
+NLI diagnostic:
+- High entailment signal (>= 0.70): 16805
+- Low entailment, informational only (< 0.50): 12002
+
+Signals used:
+- SBERT sentence similarity: primary semantic similarity signal
+- TF-IDF lexical similarity: supporting lexical-overlap signal
+- NLI entailment/neutral/contradiction: diagnostic; contradiction can flag risk
+- Deterministic style/quality signals from improvements2.py
+
+IMPORTANT:
+NLI low entailment is NOT an automatic rejection rule.
+A low NLI entailment score can occur for valid paraphrases.
+Thresholds are screening heuristics, not proof of meaning preservation.
+Inspect semantic_risk.csv and manual_review.csv before training.
+
+Backup: D:\Projects\lagom-humanizer2.0\Data\improved_data\_backups\before_finalize_20260926_022437

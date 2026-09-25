@@ -1,0 +1,25 @@
+Lagom finalization report
+===========================
+Total base rows: 29792
+Semantic-risk rows: 12297
+Final training pool: 17495
+Train: 13996
+Validation: 1749
+Test: 1750
+Backup: D:\Projects\lagom-humanizer2.0\Data\improved_data\_backups\before_finalize_20260926_015241
+
+Signals used:
+- SBERT sentence similarity
+- TF-IDF lexical similarity
+- NLI entailment / contradiction probabilities
+- deterministic style/quality signals from improvements2.py
+
+Thresholds:
+- SBERT review threshold: 0.68
+- SBERT low threshold: 0.55
+- TF-IDF low threshold: 0.15
+- NLI entailment threshold: 0.5
+- NLI contradiction threshold: 0.50
+
+Important: thresholds are screening heuristics, not proof of meaning preservation.
+Inspect semantic_risk.csv and manual_review.csv before training.

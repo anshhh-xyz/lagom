@@ -1,0 +1,18 @@
+Expected project structure:
+
+lagom-humanizer2.0/
+└── data/
+    ├── Collection/
+    │   └── <your raw CSV>
+    ├── improved_data/
+    │   └── <generated automatically>
+    └── preprocessing/
+        ├── common.py
+        ├── improvements2.py
+        ├── sbert_semantic.py
+        ├── tfidf_similarity.py
+        ├── nli_cross_encoder.py
+        ├── finalize_dataset.py
+        ├── requirements.txt
+        ├── README.md
+        └── run_pipeline.bat
