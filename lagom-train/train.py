@@ -5,7 +5,7 @@
     python train.py --preset kaggle            # Kaggle T4     (Qwen2.5-7B)
     python train.py --preset local8gb --max-samples 300 --epochs 1   # smoke test first!
 
-Backend: Unsloth if importable (faster, less VRAM), otherwise plain transformers+peft+bitsandbytes.
+Backend: plain transformers + peft + bitsandbytes (works on native Windows).
 """
 import argparse
 import inspect
@@ -17,7 +17,7 @@ import time
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
-from common import PRESETS, hf_base_name, build_messages  # noqa: E402
+from common import PRESETS, build_messages  # noqa: E402
 from data import load_pairs, split_pairs, encode  # noqa: E402
 
 
@@ -55,7 +55,6 @@ def parse_args():
     p.add_argument("--epochs", type=float, default=1.0)
     p.add_argument("--save-steps", type=int, default=200)
     p.add_argument("--max-samples", type=int, default=None, help="Use only N training rows (smoke test)")
-    p.add_argument("--backend", choices=["auto", "unsloth", "hf"], default="auto")
     p.add_argument("--resume", action="store_true", help="Resume from latest checkpoint in output-dir")
     p.add_argument("--seed", type=int, default=42)
     a = p.parse_args()
@@ -69,52 +68,44 @@ def parse_args():
 def main():
     args = parse_args()
 
-    # Unsloth must be imported BEFORE transformers / peft.
-    use_unsloth = False
-    if args.backend in ("auto", "unsloth"):
-        try:
-            from unsloth import FastLanguageModel  # noqa: F401
-            use_unsloth = True
-        except Exception as e:  # ImportError, or GPU/triton problems on Windows
-            if args.backend == "unsloth":
-                raise
-            print(f"[info] Unsloth unavailable ({type(e).__name__}: {str(e)[:120]}) -> using plain HF + PEFT backend")
-
     import torch
     from transformers import (AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, Trainer,
                               TrainingArguments)
     from transformers.trainer_utils import get_last_checkpoint
+    from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
     from datasets import Dataset
 
     if not torch.cuda.is_available():
         raise SystemExit("No CUDA GPU visible. On RTX 50-series install PyTorch built for CUDA 12.8+ (see README).")
     props = torch.cuda.get_device_properties(0)
-    print(f"GPU: {props.name} | {props.total_memory / 1e9:.1f} GB | backend={'unsloth' if use_unsloth else 'hf+peft'}")
+    print(f"GPU: {props.name} | {props.total_memory / 1e9:.1f} GB | backend=hf+peft")
     bf16 = torch.cuda.is_bf16_supported()
     dtype = torch.bfloat16 if bf16 else torch.float16
 
     # ---------------- model ----------------
-    if use_unsloth:
-        from unsloth import FastLanguageModel
-        model, tokenizer = FastLanguageModel.from_pretrained(
-            model_name=args.model, max_seq_length=args.max_seq_len, dtype=None, load_in_4bit=True)
-        model = FastLanguageModel.get_peft_model(
-            model, r=args.lora_r, lora_alpha=args.lora_alpha, lora_dropout=0, bias="none",
-            target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-            use_gradient_checkpointing="unsloth", random_state=args.seed)
-    else:
-        from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
-        base = hf_base_name(args.model)
-        tokenizer = AutoTokenizer.from_pretrained(base)
-        bnb = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4",
-                                 bnb_4bit_use_double_quant=True, bnb_4bit_compute_dtype=dtype)
-        model = AutoModelForCausalLM.from_pretrained(base, quantization_config=bnb, device_map={"": 0},
-                                                     torch_dtype=dtype, attn_implementation="sdpa")
-        model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True,
-                                                gradient_checkpointing_kwargs={"use_reentrant": False})
-        model = get_peft_model(model, LoraConfig(
-            r=args.lora_r, lora_alpha=args.lora_alpha, lora_dropout=0.0, bias="none", task_type="CAUSAL_LM",
-            target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]))
+    tokenizer = AutoTokenizer.from_pretrained(args.model)
+    bnb = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_use_double_quant=True,
+        bnb_4bit_compute_dtype=dtype,
+    )
+    model = AutoModelForCausalLM.from_pretrained(
+        args.model,
+        quantization_config=bnb,
+        device_map={"": 0},
+        torch_dtype=dtype,
+        attn_implementation="sdpa",
+    )
+    model = prepare_model_for_kbit_training(
+        model,
+        use_gradient_checkpointing=True,
+        gradient_checkpointing_kwargs={"use_reentrant": False},
+    )
+    model = get_peft_model(model, LoraConfig(
+        r=args.lora_r, lora_alpha=args.lora_alpha, lora_dropout=0.0, bias="none", task_type="CAUSAL_LM",
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+    ))
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "right"
@@ -161,11 +152,10 @@ def main():
         logging_steps=10, save_strategy="steps", save_steps=args.save_steps, save_total_limit=2,
         eval_steps=args.save_steps, prediction_loss_only=True,
         group_by_length=True, report_to="none", seed=args.seed,
-        gradient_checkpointing=not use_unsloth,
+        gradient_checkpointing=True,
+        gradient_checkpointing_kwargs={"use_reentrant": False},
         remove_unused_columns=False,
     )
-    if not use_unsloth:
-        ta["gradient_checkpointing_kwargs"] = {"use_reentrant": False}
     key = "eval_strategy" if "eval_strategy" in inspect.signature(TrainingArguments.__init__).parameters else "evaluation_strategy"
     ta[key] = "steps"
     trainer = Trainer(model=model, args=TrainingArguments(**ta), train_dataset=train_ds,
@@ -187,11 +177,7 @@ def main():
     print(f"Adapter saved -> {adapter_dir}")
 
     if val_pairs:
-        if use_unsloth:
-            from unsloth import FastLanguageModel
-            FastLanguageModel.for_inference(model)
-        else:
-            model.config.use_cache = True
+        model.config.use_cache = True
         model.eval()
         p = val_pairs[0]
         prompt = tokenizer.apply_chat_template(build_messages(p["ai"], p["category"]), tokenize=False, add_generation_prompt=True)

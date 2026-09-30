@@ -17,7 +17,7 @@ train_pkg_dir = os.path.join(script_dir, "..", "lagom-train")
 if os.path.exists(train_pkg_dir) and train_pkg_dir not in sys.path:
     sys.path.append(train_pkg_dir)
 
-from common import CATEGORY_INSTRUCTIONS, build_messages, hf_base_name  # noqa: E402
+from common import CATEGORY_INSTRUCTIONS, build_messages  # noqa: E402
 
 app = FastAPI(
     title="Lagom Humanizer API",
@@ -129,7 +129,7 @@ class ModelHolder:
                             with open(run_meta_path, "r", encoding="utf-8") as f:
                                 meta = json.load(f)
                                 if "base_model" in meta:
-                                    base_id = hf_base_name(meta["base_model"])
+                                    base_id = meta["base_model"]
                         except Exception:
                             pass
                     elif os.path.exists(adapter_cfg_path):
@@ -137,7 +137,7 @@ class ModelHolder:
                             with open(adapter_cfg_path, "r", encoding="utf-8") as f:
                                 cfg = json.load(f)
                                 if "base_model_name_or_path" in cfg:
-                                    base_id = hf_base_name(cfg["base_model_name_or_path"])
+                                    base_id = cfg["base_model_name_or_path"]
                         except Exception:
                             pass
 

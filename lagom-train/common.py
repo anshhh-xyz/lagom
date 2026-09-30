@@ -1,5 +1,4 @@
-"""Shared prompts + presets. Prompts are identical to deep_mode/server/app.py and
-deep_mode/prompts/deep_prompts.ts, so the trained model plugs straight into your server."""
+"""Shared prompts + presets for Lagom training and inference."""
 
 SYSTEM_PROMPT = (
     "You are Lagom, a specialized humanizer AI. Your task is to rewrite the provided "
@@ -57,28 +56,16 @@ def build_messages(text: str, category: str = "general", style: str | None = Non
 
 
 # --- presets -------------------------------------------------------------------------
-# local8gb : RTX 5050 8GB. 7B QLoRA does not leave enough headroom for ~1.5k-token
-#            sequences on 8GB, so the preset uses a 3B model.
-# kaggle   : T4 16GB (single GPU is used). 7B fits at bs=2.
+# local8gb : RTX 5050 8GB. Uses Qwen2.5-3B-Instruct (downloaded as full bf16, quantized
+#            to 4-bit NF4 at load time by bitsandbytes).
+# kaggle   : Kaggle T4 16GB. Qwen2.5-7B fits at batch_size=2.
 PRESETS = {
     "local8gb": dict(
-        model="unsloth/Qwen2.5-3B-Instruct-bnb-4bit",
+        model="Qwen/Qwen2.5-3B-Instruct",
         max_seq_len=1536, batch_size=1, grad_accum=16, lora_r=32, lora_alpha=32,
     ),
     "kaggle": dict(
-        model="unsloth/Qwen2.5-7B-Instruct-bnb-4bit",
+        model="Qwen/Qwen2.5-7B-Instruct",
         max_seq_len=1536, batch_size=2, grad_accum=8, lora_r=32, lora_alpha=32,
     ),
 }
-
-
-def hf_base_name(name: str) -> str:
-    """'unsloth/Qwen2.5-3B-Instruct-bnb-4bit' -> 'Qwen/Qwen2.5-3B-Instruct'."""
-    n = name
-    if n.startswith("unsloth/"):
-        n = n[len("unsloth/"):]
-        if n.endswith("-bnb-4bit"):
-            n = n[: -len("-bnb-4bit")]
-        if n.startswith("Qwen"):
-            n = "Qwen/" + n
-    return n

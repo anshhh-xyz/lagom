@@ -10,7 +10,7 @@ import json
 import os
 import sys
 
-from common import build_messages, hf_base_name
+from common import build_messages
 
 
 def main():
@@ -50,7 +50,7 @@ def main():
     else:
         from peft import PeftModel
         with open(os.path.join(a.adapter, "lagom_run.json")) as f:
-            base = hf_base_name(json.load(f)["base_model"])
+            base = json.load(f)["base_model"]
         tok = AutoTokenizer.from_pretrained(a.adapter)
         bnb = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4",
                                  bnb_4bit_use_double_quant=True, bnb_4bit_compute_dtype=dtype)

@@ -1,4 +1,4 @@
-# Install PyTorch FIRST (see README) - RTX 50-series needs a CUDA 12.8+ build.
+# Install PyTorch FIRST (see README) — RTX 50-series needs a CUDA 12.8+ build.
 transformers>=4.46
 peft>=0.13
 accelerate>=1.0
@@ -6,5 +6,3 @@ bitsandbytes>=0.45.3
 datasets>=3.0
 pandas>=2.0
 sentencepiece
-# Optional but recommended (faster + less VRAM). Train falls back automatically if it fails to import:
-# unsloth
