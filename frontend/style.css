@@ -125,6 +125,47 @@ body {
 .status-indicator.offline {
   color: #71717a;
 }
+.status-indicator.pending {
+  color: #a07b2e;
+}
+
+/* Model Not-Ready Banner */
+.model-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  background: rgba(160, 123, 46, 0.08);
+  border: 1px solid rgba(160, 123, 46, 0.22);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  flex-wrap: wrap;
+}
+
+.model-banner-icon {
+  font-size: 14px;
+  color: #c09030;
+  flex-shrink: 0;
+}
+
+.model-banner-text {
+  color: #c09030;
+}
+
+.model-banner-hint {
+  color: var(--text-faint);
+  margin-left: auto;
+}
+
+.model-banner-hint code {
+  background: rgba(255,255,255,0.05);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 10.5px;
+}
+
 
 .settings-btn {
   background: none;

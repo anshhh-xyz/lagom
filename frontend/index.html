@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Lagom — Minimalist Humanizer</title>
+  <title>Lagom — Humanizer</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link
@@ -59,6 +59,13 @@
         </div>
       </div>
     </aside>
+
+    <!-- Model Not Ready Banner -->
+    <div id="modelBanner" class="model-banner">
+      <span class="model-banner-icon">⬡</span>
+      <span class="model-banner-text">Model training in progress — the interface will activate automatically once training is complete.</span>
+      <span class="model-banner-hint">Run <code>python train.py --preset local8gb --output-dir outputs</code> in <code>lagom-train/</code></span>
+    </div>
 
     <!-- Style Navigation -->
     <nav class="style-nav" aria-label="Rewrite style selection">

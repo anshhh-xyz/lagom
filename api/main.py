@@ -43,66 +43,140 @@ class ModelHolder:
         self.device = "cuda" if os.environ.get("CUDA_VISIBLE_DEVICES", "0") != "-1" else "cpu"
         self.model_type = "unloaded"  # 'adapter', 'merged', or 'unloaded'
         self.loaded_path = None
+        self.is_loading = False
         self.lock = threading.Lock()
+
+    def find_model_dir(self):
+        """Scans for valid trained adapter or merged model checkpoints."""
+        candidates = []
+        if os.environ.get("LAGOM_MODEL_PATH"):
+            candidates.append(os.environ.get("LAGOM_MODEL_PATH"))
+        if os.environ.get("LAGOM_ADAPTER_PATH"):
+            candidates.append(os.environ.get("LAGOM_ADAPTER_PATH"))
+        if os.environ.get("LAGOM_MERGED_PATH"):
+            candidates.append(os.environ.get("LAGOM_MERGED_PATH"))
+
+        candidates.extend([
+            os.path.join(train_pkg_dir, "outputs", "merged"),
+            os.path.join(script_dir, "..", "outputs", "merged"),
+            os.path.join(train_pkg_dir, "outputs", "adapter"),
+            os.path.join(script_dir, "..", "outputs", "adapter"),
+            os.path.join(train_pkg_dir, "outputs_smoke", "adapter"),
+            os.path.join(script_dir, "..", "outputs_smoke", "adapter"),
+        ])
+
+        for path in candidates:
+            if not path or not os.path.exists(path):
+                continue
+
+            # Check for merged model
+            if (
+                os.path.exists(os.path.join(path, "model.safetensors"))
+                or os.path.exists(os.path.join(path, "pytorch_model.bin"))
+                or (os.path.exists(os.path.join(path, "config.json")) and not os.path.exists(os.path.join(path, "adapter_config.json")))
+            ):
+                return "merged", os.path.abspath(path)
+
+            # Check for LoRA adapter
+            if (
+                os.path.exists(os.path.join(path, "adapter_config.json"))
+                or os.path.exists(os.path.join(path, "lagom_run.json"))
+            ):
+                return "adapter", os.path.abspath(path)
+
+        return None, None
 
     def try_load(self):
         with self.lock:
             if self.model is not None:
                 return True
 
-            import torch
-            if not torch.cuda.is_available():
-                self.device = "cpu"
+            kind, model_dir = self.find_model_dir()
+            if not kind or not model_dir:
+                return False
 
-            adapter_path = os.path.join(train_pkg_dir, "outputs", "adapter")
-            merged_path = os.path.join(train_pkg_dir, "outputs", "merged")
-
-            # Check if merged weights exist
-            if os.path.exists(os.path.join(merged_path, "model.safetensors")) or os.path.exists(os.path.join(merged_path, "pytorch_model.bin")):
-                from transformers import AutoModelForCausalLM, AutoTokenizer
+            self.is_loading = True
+            try:
+                import torch
                 dtype = torch.bfloat16 if (torch.cuda.is_available() and torch.cuda.is_bf16_supported()) else torch.float16
-                print(f"[API] Loading merged model from: {merged_path}")
-                self.tokenizer = AutoTokenizer.from_pretrained(merged_path)
-                self.model = AutoModelForCausalLM.from_pretrained(
-                    merged_path,
-                    torch_dtype=dtype,
-                    device_map={"": 0} if torch.cuda.is_available() else "cpu",
-                )
-                self.model.eval()
-                self.model_type = "merged"
-                self.loaded_path = merged_path
-                return True
+                device_target = {"": 0} if torch.cuda.is_available() else {"": "cpu"}
 
-            # Check if LoRA adapter exists
-            run_json = os.path.join(adapter_path, "lagom_run.json")
-            if os.path.exists(run_json):
-                from peft import PeftModel
-                from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-                with open(run_json) as f:
-                    base_id = hf_base_name(json.load(f)["base_model"])
+                if kind == "merged":
+                    from transformers import AutoModelForCausalLM, AutoTokenizer
+                    print(f"[API] Found merged weights at: {model_dir}. Loading...")
+                    self.tokenizer = AutoTokenizer.from_pretrained(model_dir)
+                    self.model = AutoModelForCausalLM.from_pretrained(
+                        model_dir,
+                        torch_dtype=dtype,
+                        device_map=device_target,
+                    )
+                    self.model.eval()
+                    self.model_type = "merged"
+                    self.loaded_path = model_dir
+                    print(f"[API] Merged model successfully loaded on {device_target}!")
+                    return True
 
-                print(f"[API] Loading base {base_id} + LoRA adapter from: {adapter_path}")
-                dtype = torch.bfloat16 if (torch.cuda.is_available() and torch.cuda.is_bf16_supported()) else torch.float16
-                self.tokenizer = AutoTokenizer.from_pretrained(adapter_path)
-                bnb = BitsAndBytesConfig(
-                    load_in_4bit=True,
-                    bnb_4bit_quant_type="nf4",
-                    bnb_4bit_use_double_quant=True,
-                    bnb_4bit_compute_dtype=dtype,
-                )
-                base_model = AutoModelForCausalLM.from_pretrained(
-                    base_id,
-                    quantization_config=bnb if torch.cuda.is_available() else None,
-                    device_map={"": 0} if torch.cuda.is_available() else "cpu",
-                    torch_dtype=dtype,
-                )
-                self.model = PeftModel.from_pretrained(base_model, adapter_path)
-                self.model.eval()
-                self.model_type = "adapter"
-                self.loaded_path = adapter_path
-                return True
+                if kind == "adapter":
+                    from peft import PeftModel
+                    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
-            return False
+                    base_id = "Qwen/Qwen2.5-3B-Instruct"
+                    run_meta_path = os.path.join(model_dir, "lagom_run.json")
+                    adapter_cfg_path = os.path.join(model_dir, "adapter_config.json")
+
+                    if os.path.exists(run_meta_path):
+                        try:
+                            with open(run_meta_path, "r", encoding="utf-8") as f:
+                                meta = json.load(f)
+                                if "base_model" in meta:
+                                    base_id = hf_base_name(meta["base_model"])
+                        except Exception:
+                            pass
+                    elif os.path.exists(adapter_cfg_path):
+                        try:
+                            with open(adapter_cfg_path, "r", encoding="utf-8") as f:
+                                cfg = json.load(f)
+                                if "base_model_name_or_path" in cfg:
+                                    base_id = hf_base_name(cfg["base_model_name_or_path"])
+                        except Exception:
+                            pass
+
+                    print(f"[API] Found adapter at: {model_dir}. Loading base {base_id} (4-bit NF4) + LoRA...")
+                    self.tokenizer = AutoTokenizer.from_pretrained(model_dir)
+                    if self.tokenizer.pad_token is None:
+                        self.tokenizer.pad_token = self.tokenizer.eos_token
+                    self.tokenizer.padding_side = "right"
+
+                    bnb = BitsAndBytesConfig(
+                        load_in_4bit=True,
+                        bnb_4bit_quant_type="nf4",
+                        bnb_4bit_use_double_quant=True,
+                        bnb_4bit_compute_dtype=dtype,
+                    ) if torch.cuda.is_available() else None
+
+                    base_model = AutoModelForCausalLM.from_pretrained(
+                        base_id,
+                        quantization_config=bnb,
+                        device_map=device_target,
+                        torch_dtype=dtype,
+                    )
+                    self.model = PeftModel.from_pretrained(base_model, model_dir)
+                    self.model.eval()
+                    self.model_type = "adapter"
+                    self.loaded_path = model_dir
+                    print(f"[API] Adapter model successfully loaded and active!")
+                    return True
+
+            except Exception as e:
+                print(f"[API] Failed to load model from {model_dir}: {e}")
+                self.model = None
+                self.tokenizer = None
+                self.model_type = "unloaded"
+                return False
+            finally:
+                self.is_loading = False
+
+        return False
 
 
 holder = ModelHolder()
@@ -140,21 +214,27 @@ def root():
 def health():
     import torch
     loaded = holder.try_load()
-    gpu_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU"
+    gpu_available = torch.cuda.is_available()
+    gpu_name = torch.cuda.get_device_name(0) if gpu_available else "CPU"
     vram_mb = (
         round(torch.cuda.memory_allocated(0) / (1024 * 1024), 1)
-        if torch.cuda.is_available()
+        if gpu_available
         else 0
     )
     return {
-        "status": "ok",
-        "gpu_available": torch.cuda.is_available(),
+        "status": "ready" if loaded else "training_pending",
+        "gpu_available": gpu_available,
         "gpu_name": gpu_name,
         "vram_allocated_mb": vram_mb,
         "model_loaded": loaded,
         "model_type": holder.model_type,
         "model_path": holder.loaded_path,
-        "note": "Ready for inference" if loaded else "Training in progress or adapter not found. Demo mode active.",
+        "is_loading": holder.is_loading,
+        "message": (
+            "Model is loaded and ready for inference."
+            if loaded
+            else "Training pending. Model weights not found in outputs/adapter or outputs/merged. Once training finishes, the model will be loaded automatically."
+        ),
     }
 
 
@@ -172,56 +252,23 @@ def get_styles():
     }
 
 
-def generate_demo_humanization(text: str, style: str) -> str:
-    """Intelligent simulated humanization when local model training has not completed yet."""
-    import re
-    cleaned = text.strip()
-    # Strip obvious AI transition markers
-    cliches = [
-        (r"\bFurthermore,\s*", ""),
-        (r"\bMoreover,\s*", ""),
-        (r"\bIn conclusion,\s*", "Ultimately, "),
-        (r"\bIt is important to note that\s*", ""),
-        (r"\bIt is crucial to remember that\s*", "Noticeably, "),
-        (r"\bDelving into the realm of\s*", "Exploring "),
-        (r"\bA testament to\s*", "proof of "),
-    ]
-    res = cleaned
-    for pat, rep in cliches:
-        res = re.sub(pat, rep, res, flags=re.IGNORECASE)
-
-    if style == "email":
-        return f"Hi there,\n\n{res}\n\nBest regards,\nAlex"
-    elif style == "essay":
-        return f"{res}\n\nThis perspective grounds the underlying thesis in actual observable dynamics."
-    elif style == "academic":
-        return f"Empirical examination indicates that {res.lower() if res else ''}"
-    return res
-
-
 @app.post("/api/humanize", response_model=HumanizeResponse)
 def humanize(req: HumanizeRequest):
     if not req.text.strip():
         raise HTTPException(status_code=400, detail="Input text cannot be empty.")
 
-    t0 = time.time()
     has_model = holder.try_load()
-
     if not has_model or holder.model is None or holder.tokenizer is None:
-        # Graceful demo response while training runs
-        output = generate_demo_humanization(req.text, req.style)
-        elapsed = round(time.time() - t0, 3)
-        return HumanizeResponse(
-            humanized=output,
-            style=req.style,
-            tokens=len(output.split()),
-            elapsed_seconds=elapsed,
-            model_mode="simulated (model training pending)",
-            word_count_original=len(req.text.split()),
-            word_count_humanized=len(output.split()),
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Model is not ready. Training has not been completed yet (no weights found in "
+                "outputs/adapter or outputs/merged). Please run the training script in lagom-train first."
+            ),
         )
 
     import torch
+    t0 = time.time()
     tok = holder.tokenizer
     model = holder.model
     prompt = tok.apply_chat_template(
@@ -260,47 +307,43 @@ async def humanize_stream(req: HumanizeRequest):
         raise HTTPException(status_code=400, detail="Input text cannot be empty.")
 
     has_model = holder.try_load()
+    if not has_model or holder.model is None or holder.tokenizer is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Model is not ready. Training has not been completed yet (no weights found in "
+                "outputs/adapter or outputs/merged). Please run the training script in lagom-train first."
+            ),
+        )
+
+    from transformers import TextIteratorStreamer
+    import torch
+
+    tok = holder.tokenizer
+    model = holder.model
+    prompt = tok.apply_chat_template(
+        build_messages(req.text, style=req.style),
+        tokenize=False,
+        add_generation_prompt=True,
+    )
+    inp = tok(prompt, return_tensors="pt", add_special_tokens=False).to(model.device)
+    streamer = TextIteratorStreamer(tok, skip_prompt=True, skip_special_tokens=True)
+
+    gen_kwargs = dict(
+        **inp,
+        streamer=streamer,
+        max_new_tokens=req.max_new_tokens,
+        do_sample=True,
+        temperature=req.temperature,
+        top_p=req.top_p,
+        repetition_penalty=1.05,
+        use_cache=True,
+    )
+
+    thread = threading.Thread(target=model.generate, kwargs=gen_kwargs)
+    thread.start()
 
     async def stream_generator() -> AsyncGenerator[str, None]:
-        if not has_model or holder.model is None or holder.tokenizer is None:
-            # Simulate streaming chunks
-            demo_text = generate_demo_humanization(req.text, req.style)
-            words = demo_text.split(" ")
-            for i, w in enumerate(words):
-                chunk = w + (" " if i < len(words) - 1 else "")
-                data = json.dumps({"token": chunk, "done": False, "mode": "simulated"})
-                yield f"data: {data}\n\n"
-                await asyncio.sleep(0.035)
-            yield f"data: {json.dumps({'token': '', 'done': True, 'mode': 'simulated'})}\n\n"
-            return
-
-        from transformers import TextIteratorStreamer
-        import torch
-
-        tok = holder.tokenizer
-        model = holder.model
-        prompt = tok.apply_chat_template(
-            build_messages(req.text, style=req.style),
-            tokenize=False,
-            add_generation_prompt=True,
-        )
-        inp = tok(prompt, return_tensors="pt", add_special_tokens=False).to(model.device)
-        streamer = TextIteratorStreamer(tok, skip_prompt=True, skip_special_tokens=True)
-
-        gen_kwargs = dict(
-            **inp,
-            streamer=streamer,
-            max_new_tokens=req.max_new_tokens,
-            do_sample=True,
-            temperature=req.temperature,
-            top_p=req.top_p,
-            repetition_penalty=1.05,
-            use_cache=True,
-        )
-
-        thread = threading.Thread(target=model.generate, kwargs=gen_kwargs)
-        thread.start()
-
         for new_text in streamer:
             if new_text:
                 data = json.dumps({"token": new_text, "done": False, "mode": f"local_{holder.model_type}"})
@@ -317,3 +360,4 @@ if __name__ == "__main__":
     import uvicorn
     print("[API] Starting Lagom API Server at http://127.0.0.1:8000 ...")
     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=False)
+

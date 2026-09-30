@@ -8,7 +8,6 @@ document.addEventListener("DOMContentLoaded", () => {
   const apiStatusBadge = document.getElementById("apiStatusBadge");
   const apiStatusText = document.getElementById("apiStatusText");
   const settingsToggleBtn = document.getElementById("settingsToggleBtn");
-  const closeSettingsBtn = document.getElementById("closeSettingsBtn");
   const settingsDrawer = document.getElementById("settingsDrawer");
 
   const tempSlider = document.getElementById("tempSlider");
@@ -27,7 +26,6 @@ document.addEventListener("DOMContentLoaded", () => {
   const pasteInputBtn = document.getElementById("pasteInputBtn");
 
   const humanizeBtn = document.getElementById("humanizeBtn");
-  const btnSpinner = document.getElementById("btnSpinner");
   const btnText = document.getElementById("btnText");
 
   const outputPlaceholder = document.getElementById("outputPlaceholder");
@@ -40,12 +38,14 @@ document.addEventListener("DOMContentLoaded", () => {
   const copyText = document.getElementById("copyText");
   const compareDiffBtn = document.getElementById("compareDiffBtn");
   const toast = document.getElementById("toast");
+  const modelBanner = document.getElementById("modelBanner");
 
   // State
   let currentStyle = "general";
   let isGenerating = false;
   let lastRawOutput = "";
   let isDiffView = false;
+  let modelReady = false;
 
   const STYLE_DESCRIPTIONS = {
     general: "Rewrite this text into natural, organic human writing. Remove artificial AI cadence, repetitive transitions, and generic over-explanations while keeping the meaning intact.",
@@ -69,33 +69,59 @@ document.addEventListener("DOMContentLoaded", () => {
     return (apiUrlInput.value || "http://127.0.0.1:8000").trim().replace(/\/+$/, "");
   }
 
-  // Check API Health
+  // ── Model readiness ─────────────────────────────────────────────────────────
+  // Disables the button and shows a banner until training is done.
+  // The health-check loop re-enables everything automatically once the model
+  // appears in outputs/adapter or outputs/merged.
+
+  function setModelReady(ready) {
+    modelReady = ready;
+    if (ready) {
+      if (modelBanner) modelBanner.classList.add("hidden");
+      if (!isGenerating) humanizeBtn.disabled = false;
+      humanizeBtn.title = "";
+    } else {
+      if (modelBanner) modelBanner.classList.remove("hidden");
+      if (!isGenerating) humanizeBtn.disabled = true;
+      humanizeBtn.title = "Waiting for model — complete training first";
+    }
+  }
+
+  // ── Health check ─────────────────────────────────────────────────────────
   async function checkHealth() {
-    apiStatusBadge.className = "status-badge checking";
-    apiStatusText.textContent = "Checking API...";
+    apiStatusBadge.className = "status-indicator checking";
+    apiStatusText.textContent = "connecting...";
 
     try {
-      const res = await fetch(`${getBaseUrl()}/api/health`, { method: "GET" });
+      const res = await fetch(`${getBaseUrl()}/api/health`, {
+        method: "GET",
+        signal: AbortSignal.timeout(5000),
+      });
       if (!res.ok) throw new Error("Status " + res.status);
       const data = await res.json();
 
-      apiStatusBadge.className = "status-indicator online";
       if (data.model_loaded) {
-        apiStatusText.textContent = `online (${data.model_type})`;
+        apiStatusBadge.className = "status-indicator online";
+        apiStatusText.textContent = `online · ${data.model_type}`;
+        if (!isGenerating) statModelMode.textContent = `local_${data.model_type}`;
+        setModelReady(true);
       } else {
-        apiStatusText.textContent = "demo mode";
+        apiStatusBadge.className = "status-indicator pending";
+        apiStatusText.textContent = "api up · awaiting model";
+        setModelReady(false);
       }
     } catch {
       apiStatusBadge.className = "status-indicator offline";
       apiStatusText.textContent = "offline";
+      setModelReady(false);
     }
   }
 
-  // Periodic Health Check
+  // Poll every 15 s — UI unlocks automatically the moment training finishes
   checkHealth();
   setInterval(checkHealth, 15000);
 
-  // Settings Events
+  // ── Settings ─────────────────────────────────────────────────────────────
   settingsToggleBtn.addEventListener("click", () => {
     settingsDrawer.classList.toggle("hidden");
   });
@@ -110,18 +136,17 @@ document.addEventListener("DOMContentLoaded", () => {
     maxTokensVal.textContent = e.target.value;
   });
 
-  // Style Selector (Tabs)
+  // ── Style selector ─────────────────────────────────────────────────────────
   stylePillsContainer.addEventListener("click", (e) => {
     const tab = e.target.closest(".style-tab, .style-pill");
     if (!tab) return;
-
     document.querySelectorAll(".style-tab, .style-pill").forEach((t) => t.classList.remove("active"));
     tab.classList.add("active");
     currentStyle = tab.dataset.style;
     styleDescription.textContent = STYLE_DESCRIPTIONS[currentStyle] || STYLE_DESCRIPTIONS.general;
   });
 
-  // Word Counters
+  // ── Word counters ──────────────────────────────────────────────────────────
   function countWords(str) {
     const trimmed = str.trim();
     return trimmed ? trimmed.split(/\s+/).length : 0;
@@ -143,7 +168,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   inputText.addEventListener("input", updateInputStats);
 
-  // Clear & Paste
+  // ── Clear & paste ──────────────────────────────────────────────────────────
   clearInputBtn.addEventListener("click", () => {
     inputText.value = "";
     updateInputStats();
@@ -162,57 +187,54 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // Samples
+  // ── Sample chips ───────────────────────────────────────────────────────────
   document.querySelectorAll(".sample-link, .sample-chip").forEach((chip) => {
     chip.addEventListener("click", () => {
       const sampleKey = chip.dataset.sample;
       if (SAMPLES[sampleKey]) {
         inputText.value = SAMPLES[sampleKey];
         updateInputStats();
-        // Activate matching style
         const matchingTab = document.querySelector(`[data-style="${sampleKey}"]`);
         if (matchingTab) matchingTab.click();
       }
     });
   });
 
-  // Toast
+  // ── Toast ──────────────────────────────────────────────────────────────────
   function showToast(msg) {
     toast.textContent = msg;
     toast.classList.remove("hidden");
-    setTimeout(() => toast.classList.add("hidden"), 2400);
+    setTimeout(() => toast.classList.add("hidden"), 2800);
   }
 
-  // Copy Output
+  // ── Copy output ────────────────────────────────────────────────────────────
   copyOutputBtn.addEventListener("click", async () => {
     if (!lastRawOutput) return;
     try {
       await navigator.clipboard.writeText(lastRawOutput);
       copyText.textContent = "Copied ✓";
       showToast("Copied humanized text to clipboard");
-      setTimeout(() => {
-        copyText.textContent = "Copy";
-      }, 2000);
+      setTimeout(() => { copyText.textContent = "copy"; }, 2000);
     } catch {
       showToast("Failed to copy");
     }
   });
 
-  // Diff Generator (Highlight rewrites)
+  // ── Diff view ──────────────────────────────────────────────────────────────
   function renderDiff(original, humanized) {
-    const origWords = original.trim().split(/\s+/);
-    const huWords = humanized.trim().split(/\s+/);
-    const origSet = new Set(origWords.map((w) => w.toLowerCase().replace(/[^\w]/g, "")));
-
-    const result = huWords.map((word) => {
-      const clean = word.toLowerCase().replace(/[^\w]/g, "");
-      if (!origSet.has(clean) && clean.length > 2) {
-        return `<span class="diff-tag-human">${word}</span>`;
-      }
-      return word;
-    });
-
-    return result.join(" ");
+    const origSet = new Set(
+      original.trim().split(/\s+/).map((w) => w.toLowerCase().replace(/[^\w]/g, ""))
+    );
+    return humanized
+      .trim()
+      .split(/\s+/)
+      .map((word) => {
+        const clean = word.toLowerCase().replace(/[^\w]/g, "");
+        return !origSet.has(clean) && clean.length > 2
+          ? `<span class="diff-tag-human">${word}</span>`
+          : word;
+      })
+      .join(" ");
   }
 
   compareDiffBtn.addEventListener("click", () => {
@@ -230,12 +252,16 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // Humanize Action
+  // ── Core humanize action ───────────────────────────────────────────────────
   async function runHumanize() {
     const text = inputText.value.trim();
     if (!text) {
       showToast("Please enter or paste AI text first.");
       inputText.focus();
+      return;
+    }
+    if (!modelReady) {
+      showToast("Model not ready — finish training first.");
       return;
     }
     if (isGenerating) return;
@@ -252,9 +278,10 @@ document.addEventListener("DOMContentLoaded", () => {
     lastRawOutput = "";
     compareDiffBtn.textContent = "Diff";
     isDiffView = false;
+    statModelMode.textContent = "generating...";
 
     const payload = {
-      text: text,
+      text,
       style: currentStyle,
       temperature: parseFloat(tempSlider.value),
       max_new_tokens: parseInt(maxTokensSlider.value, 10),
@@ -265,13 +292,16 @@ document.addEventListener("DOMContentLoaded", () => {
 
     try {
       if (isStreaming) {
-        // SSE Streaming
         const response = await fetch(`${getBaseUrl()}/api/humanize/stream`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         });
 
+        if (response.status === 503) {
+          const err = await response.json().catch(() => ({}));
+          throw new Error(err.detail || "model_not_ready");
+        }
         if (!response.ok) throw new Error("HTTP Error " + response.status);
 
         const reader = response.body.getReader();
@@ -294,23 +324,24 @@ document.addEventListener("DOMContentLoaded", () => {
                   outputText.textContent = lastRawOutput;
                   updateOutputStats(lastRawOutput);
                 }
-                if (data.mode) {
-                  statModelMode.textContent = data.mode;
-                }
+                if (data.mode) statModelMode.textContent = data.mode;
               } catch {}
             }
           }
         }
       } else {
-        // Standard JSON
         const response = await fetch(`${getBaseUrl()}/api/humanize`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         });
 
+        if (response.status === 503) {
+          const err = await response.json().catch(() => ({}));
+          throw new Error(err.detail || "model_not_ready");
+        }
         if (!response.ok) {
-          const err = await response.json();
+          const err = await response.json().catch(() => ({}));
           throw new Error(err.detail || "Request failed");
         }
 
@@ -323,20 +354,38 @@ document.addEventListener("DOMContentLoaded", () => {
 
       const totalSeconds = ((performance.now() - startTime) / 1000).toFixed(2);
       statModelMode.textContent += ` • ${totalSeconds}s`;
+
     } catch (err) {
-      outputText.textContent = `[Connection Error]: ${err.message}\nMake sure the API server is running on ${getBaseUrl()} (run 'start.bat' in the api/ folder).`;
-      statModelMode.textContent = "Error";
+      const isNotReady =
+        err.message.includes("model_not_ready") ||
+        err.message.toLowerCase().includes("not ready") ||
+        err.message.toLowerCase().includes("training");
+
+      if (isNotReady) {
+        // Reset output pane to waiting state — no garbage text
+        outputText.textContent = "";
+        outputText.classList.add("hidden");
+        outputPlaceholder.classList.remove("hidden");
+        statModelMode.textContent = "awaiting training";
+        setModelReady(false);
+        showToast("Model training not complete — run the training script first.");
+      } else {
+        outputText.textContent =
+          `[Connection Error]: ${err.message}\n` +
+          `Make sure the API server is running on ${getBaseUrl()} — run 'start.bat' in the api/ folder.`;
+        statModelMode.textContent = "error";
+      }
     } finally {
       outputText.classList.remove("streaming");
       isGenerating = false;
-      humanizeBtn.disabled = false;
+      if (modelReady) humanizeBtn.disabled = false;
       btnText.textContent = "Humanize";
     }
   }
 
   humanizeBtn.addEventListener("click", runHumanize);
 
-  // Keyboard shortcut: Ctrl + Enter
+  // Keyboard shortcut: Ctrl/Cmd + Enter
   document.addEventListener("keydown", (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
       e.preventDefault();
