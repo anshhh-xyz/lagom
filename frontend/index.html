@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lagom — Minimalist Humanizer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500&family=Inter:wght@300;400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;1,6..72,400&display=swap"
+    rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+  <div class="app-layout">
+    <!-- Top Header -->
+    <header class="header">
+      <div class="header-left">
+        <a href="#" class="brand">lagom</a>
+        <span class="sub-brand">humanizer</span>
+      </div>
+
+      <div class="header-right">
+        <div id="apiStatusBadge" class="status-indicator">
+          <span id="apiStatusText" class="status-text">connecting</span>
+        </div>
+        <button id="settingsToggleBtn" class="settings-btn" aria-label="Settings">
+          settings
+        </button>
+      </div>
+    </header>
+
+    <!-- Settings Drawer (Collapsible) -->
+    <aside id="settingsDrawer" class="settings-panel hidden">
+      <div class="settings-panel-inner">
+        <div class="settings-row">
+          <label for="apiUrlInput">API endpoint</label>
+          <input type="text" id="apiUrlInput" value="http://127.0.0.1:8000" spellcheck="false">
+        </div>
+        <div class="settings-row">
+          <div class="label-with-value">
+            <label for="tempSlider">Creativity (temperature)</label>
+            <span id="tempVal" class="setting-val">0.70</span>
+          </div>
+          <input type="range" id="tempSlider" min="0.1" max="1.3" step="0.05" value="0.7">
+        </div>
+        <div class="settings-row">
+          <div class="label-with-value">
+            <label for="maxTokensSlider">Max length (tokens)</label>
+            <span id="maxTokensVal" class="setting-val">800</span>
+          </div>
+          <input type="range" id="maxTokensSlider" min="150" max="1500" step="50" value="800">
+        </div>
+        <div class="settings-row checkbox-row">
+          <label for="streamToggle">Stream output tokens</label>
+          <input type="checkbox" id="streamToggle" checked>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Style Navigation -->
+    <nav class="style-nav" aria-label="Rewrite style selection">
+      <div class="style-tabs" id="stylePillsContainer" role="tablist">
+        <button class="style-tab active" data-style="general" role="tab">general</button>
+        <button class="style-tab" data-style="essay" role="tab">essay</button>
+        <button class="style-tab" data-style="academic" role="tab">academic</button>
+        <button class="style-tab" data-style="email" role="tab">email</button>
+        <button class="style-tab" data-style="document" role="tab">document</button>
+      </div>
+      <p id="styleDescription" class="style-hint">
+        Clean, organic human writing. Strips robotic AI cadence and formulaic cliches.
+      </p>
+    </nav>
+
+    <!-- Writing Canvas Workspace -->
+    <main class="workspace">
+      <!-- Input Column -->
+      <section class="pane input-pane">
+        <div class="pane-toolbar">
+          <span class="pane-title">original</span>
+          <div class="pane-tools">
+            <button id="pasteInputBtn" class="text-tool-btn">paste</button>
+            <button id="clearInputBtn" class="text-tool-btn">clear</button>
+          </div>
+        </div>
+
+        <div class="textarea-wrap">
+          <textarea id="inputText" placeholder="Type or paste AI text here..." spellcheck="false"></textarea>
+        </div>
+
+        <div class="pane-footer">
+          <div class="stats-group">
+            <span id="inputWordCount">0 words</span>
+            <span class="stat-sep">·</span>
+            <span id="inputCharCount">0 characters</span>
+          </div>
+          <div class="sample-group">
+            <span class="sample-caption">try:</span>
+            <button class="sample-link" data-sample="essay">essay</button>
+            <button class="sample-link" data-sample="academic">academic</button>
+            <button class="sample-link" data-sample="email">email</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Center Action Button -->
+      <div class="action-divider">
+        <button id="humanizeBtn" class="humanize-button" aria-label="Humanize text">
+          <span class="button-label" id="btnText">Humanize</span>
+          <span class="button-kbd">⌘↵</span>
+        </button>
+      </div>
+
+      <!-- Output Column -->
+      <section class="pane output-pane">
+        <div class="pane-toolbar">
+          <span class="pane-title">humanized</span>
+          <div class="pane-tools">
+            <button id="compareDiffBtn" class="text-tool-btn">diff</button>
+            <button id="copyOutputBtn" class="text-tool-btn">
+              <span id="copyText">copy</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="output-wrap">
+          <div id="outputPlaceholder" class="empty-notice">
+            <p>Rewritten prose will flow here with natural cadence and nuanced sentence rhythm.</p>
+          </div>
+          <div id="outputText" class="output-content hidden"></div>
+          <div id="outputDiff" class="output-diff-view hidden"></div>
+        </div>
+
+        <div class="pane-footer">
+          <div class="stats-group">
+            <span id="outputWordCount">0 words</span>
+            <span class="stat-sep">·</span>
+            <span id="outputReadingTime">0 min read</span>
+          </div>
+          <div id="executionStats" class="meta-tag">
+            <span id="statModelMode">ready</span>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="toast hidden" role="status">copied to clipboard</div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+
+</html>
