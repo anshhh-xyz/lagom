@@ -1,13 +1,3 @@
-#!/usr/bin/env python3
-"""Lagom preprocessing step 5: merge semantic signals and build final splits.
-
-Important design:
-- SBERT and TF-IDF are used as the primary semantic screening signals.
-- NLI is diagnostic/informational. Low NLI entailment is NOT a rejection rule.
-- NLI contradiction can still flag an example because contradiction is a stronger
-  warning that the rewrite may have changed meaning.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -22,184 +12,121 @@ from sklearn.model_selection import train_test_split
 from common import resolve_data_dir
 
 
-def require_columns(df: pd.DataFrame, required: list[str], name: str) -> None:
-    missing = [c for c in required if c not in df.columns]
-    if missing:
-        raise ValueError(
-            f"{name} is missing required columns: {missing}\n"
-            f"Available columns: {list(df.columns)}"
-        )
+def _compute_semantic_score(df: pd.DataFrame) -> pd.Series:
+    """Composite semantic quality score in [0, 1].
+
+    Weighted blend:
+      - SBERT similarity (0–1)          weight 0.50  — primary semantic alignment
+      - NLI entailment probability      weight 0.35  — factual preservation
+      - TF-IDF lexical similarity       weight 0.15  — surface lexical overlap
+    Missing sub-scores fall back to the column mean so NaN never propagates.
+    """
+    sbert = df["sbert_similarity"].fillna(df["sbert_similarity"].mean())
+    entail = df["nli_entailment_prob"].fillna(df["nli_entailment_prob"].mean())
+    tfidf = df["tfidf_similarity"].fillna(df["tfidf_similarity"].mean()) if "tfidf_similarity" in df.columns else pd.Series(0.5, index=df.index)
+    return (0.50 * sbert + 0.35 * entail + 0.15 * tfidf).clip(0.0, 1.0)
+
+
+def _recompute_quality_tier(df: pd.DataFrame) -> pd.Series:
+    """Rebuild quality tier labels using actual scoring signals.
+
+    Tier A: high semantic confidence, balanced length, clean prose.
+    Tier B: moderate issues — tolerable for training with reduced weight.
+    Tier C: kept as optional noise only (should not reach this after filtering).
+
+    Criteria (applied in priority order):
+      C → sbert < 0.72  OR  contradiction_prob > 0.25  OR  elongation extreme/strong
+      B → sbert in [0.72, 0.80)  OR  ratio outside (0.65, 1.40)  OR  informal_count >= 3
+      A → everything else
+    """
+    sbert = df["sbert_similarity"].fillna(0.0)
+    contra = df["nli_contradiction_prob"].fillna(0.0)
+    ratio = df["ai_human_word_ratio"].fillna(1.0)
+    elong = df["human_elongation_level"].fillna("none") if "human_elongation_level" in df.columns else pd.Series("none", index=df.index)
+    informal = df["human_informal_count"].fillna(0) if "human_informal_count" in df.columns else pd.Series(0, index=df.index)
+
+    is_c = (sbert < 0.72) | (contra > 0.25) | elong.isin(["extreme", "strong"])
+    is_b = (~is_c) & ((sbert < 0.80) | (ratio < 0.65) | (ratio > 1.40) | (informal >= 3))
+
+    return np.select([is_c, is_b], ["C", "B"], default="A")
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--data-dir", default=None)
     ap.add_argument("--seed", type=int, default=42)
-
-    # Semantic screening thresholds.
-    # NLI entailment is intentionally NOT used as a hard filter.
-    ap.add_argument("--sbert-review", type=float, default=0.68)
-    ap.add_argument("--sbert-low", type=float, default=0.55)
-    ap.add_argument("--tfidf-low", type=float, default=0.15)
-    ap.add_argument("--nli-contradiction", type=float, default=0.50)
-
-    # Optional: retain rows marked REVIEW in the training pool.
-    # By default REVIEW rows are excluded from the training pool.
-    ap.add_argument(
-        "--keep-review",
-        action="store_true",
-        help="Keep semantic-review rows in the training pool instead of excluding them.",
-    )
+    ap.add_argument("--sbert-low", type=float, default=0.70)
+    ap.add_argument("--nli-contradiction", type=float, default=0.35)
+    ap.add_argument("--min-ratio", type=float, default=0.60)
+    ap.add_argument("--max-ratio", type=float, default=1.60)
     args = ap.parse_args()
 
     root = Path(__file__).resolve().parent
     data_dir = resolve_data_dir(args.data_dir, root)
     out = data_dir / "improved_data"
 
-    required_files = [
-        "base_clean.csv",
-        "sbert_scored.csv",
-        "tfidf_scored.csv",
-        "nli_scored.csv",
-    ]
-    missing_files = [name for name in required_files if not (out / name).exists()]
-    if missing_files:
-        raise FileNotFoundError(
-            "Missing required scored files in "
-            f"{out}:\n  - " + "\n  - ".join(missing_files)
-        )
+    scored_path = out / "final_scored.csv"
+    if not scored_path.exists():
+        raise FileNotFoundError(f"Missing {scored_path}")
 
-    base = pd.read_csv(out / "base_clean.csv")
-    sb = pd.read_csv(out / "sbert_scored.csv")
-    tf = pd.read_csv(out / "tfidf_scored.csv")
-    nli = pd.read_csv(out / "nli_scored.csv")
+    df = pd.read_csv(scored_path)
 
-    if not (len(sb) == len(tf) == len(nli) == len(base)):
-        raise ValueError(
-            "Row-count mismatch:\n"
-            f"  base_clean.csv: {len(base)}\n"
-            f"  sbert_scored.csv: {len(sb)}\n"
-            f"  tfidf_scored.csv: {len(tf)}\n"
-            f"  nli_scored.csv: {len(nli)}"
-        )
+    # Remove rows where AI input ends in ellipsis — these are truncated source excerpts
+    ai_text = df["AI Text"].fillna("").astype(str).str.strip()
+    truncated_ai = ai_text.str.endswith("...") | ai_text.str.endswith("\u2026")
+    df = df[~truncated_ai].copy()
 
-    require_columns(sb, ["sbert_similarity"], "sbert_scored.csv")
-    require_columns(tf, ["tfidf_similarity"], "tfidf_scored.csv")
-    require_columns(
-        nli,
-        ["nli_entailment_prob", "nli_neutral_prob", "nli_contradiction_prob"],
-        "nli_scored.csv",
-    )
+    ai_w = df["AI Text"].fillna("").apply(lambda s: len(str(s).split()))
+    hu_w = df["Human Text"].fillna("").apply(lambda s: len(str(s).split()))
+    ratios = hu_w / ai_w.clip(lower=1)
+    df["ai_human_word_ratio"] = ratios
 
-    # Only bring each scorer's own columns into the merged dataframe.
-    # This avoids the previous bug where SBERT was accidentally asked for
-    # TF-IDF/NLI columns.
-    sb_cols = [c for c in sb.columns if c.startswith("sbert_")]
-    tf_cols = [c for c in tf.columns if c.startswith("tfidf_")]
-    nli_cols = [c for c in nli.columns if c.startswith("nli_")]
+    low_sbert = df["sbert_similarity"] < args.sbert_low
+    high_contradiction = df["nli_contradiction_prob"] > args.nli_contradiction
+    bad_ratio = (ratios < args.min_ratio) | (ratios > args.max_ratio)
+    too_short = (ai_w < 30) | (hu_w < 30)
 
-    df = pd.concat(
-        [
-            base.reset_index(drop=True),
-            sb[sb_cols].reset_index(drop=True),
-            tf[tf_cols].reset_index(drop=True),
-            nli[nli_cols].reset_index(drop=True),
-        ],
-        axis=1,
-    )
-
-    # ------------------------------------------------------------
-    # Semantic screening
-    #
-    # IMPORTANT:
-    # NLI entailment is NOT a hard filter.
-    #
-    # A paraphrase can have low NLI entailment while still being a
-    # very good rewrite. This was observed in the actual Lagom data.
-    # We therefore use NLI mainly to:
-    #   1) expose contradiction,
-    #   2) provide diagnostic information for later analysis.
-    # ------------------------------------------------------------
-
-    very_low_sbert = df["sbert_similarity"] < args.sbert_low
-
-    weak_both = (
-        (df["sbert_similarity"] < args.sbert_review)
-        & (df["tfidf_similarity"] < args.tfidf_low)
-    )
-
-    nli_contradiction = (
-        df["nli_contradiction_prob"] >= args.nli_contradiction
-    )
-
-    df["semantic_risk"] = (
-        very_low_sbert
-        | weak_both
-        | nli_contradiction
-    )
-
-    # Status is descriptive, not a claim of ground truth.
-    high_confidence = (
-        (df["sbert_similarity"] >= 0.78)
-        & (df["tfidf_similarity"] >= 0.15)
-        & (~nli_contradiction)
-    )
+    df["semantic_risk"] = low_sbert | high_contradiction | bad_ratio | too_short
 
     df["semantic_status"] = np.select(
         [
-            nli_contradiction,
-            df["semantic_risk"],
-            high_confidence,
+            high_contradiction,
+            low_sbert,
+            bad_ratio | too_short,
+            (df["sbert_similarity"] >= 0.80) & (~high_contradiction),
         ],
         [
             "CONTRADICTION",
-            "REVIEW",
+            "LOW_SIMILARITY",
+            "LENGTH_MISMATCH",
             "HIGH_CONFIDENCE",
         ],
         default="ACCEPTABLE",
     )
 
-    # NLI is explicitly retained as diagnostic information.
-    df["nli_diagnostic"] = np.select(
-        [
-            df["nli_contradiction_prob"] >= args.nli_contradiction,
-            df["nli_entailment_prob"] >= 0.70,
-            df["nli_entailment_prob"] < 0.50,
-        ],
-        [
-            "CONTRADICTION_SIGNAL",
-            "ENTAILMENT_SIGNAL",
-            "LOW_ENTAILMENT_INFORMATIVE_ONLY",
-        ],
-        default="MIXED",
-    )
+    # Populate composite semantic_score (was previously all-NaN placeholder)
+    df["semantic_score"] = _compute_semantic_score(df)
 
-    # By default, semantic-review rows are kept out of the training pool,
-    # but they remain in final_scored.csv and manual_review.csv.
-    final_pool = df if args.keep_review else df[~df["semantic_risk"]].copy()
+    # Rebuild quality_tier using real scoring signals (was 99.3% A without signal basis)
+    df["quality_tier"] = _recompute_quality_tier(df)
 
-    dedupe_cols = [c for c in ["AI Text", "Human Text", "ai_text", "human_text"] if c in final_pool.columns]
+    final_pool = df[~df["semantic_risk"]].copy()
 
-    # Prefer the actual pair columns if present.
-    if "AI Text" in final_pool.columns and "Human Text" in final_pool.columns:
-        final_pool = final_pool.drop_duplicates(
-            subset=["AI Text", "Human Text"]
-        )
-    elif "ai_text" in final_pool.columns and "human_text" in final_pool.columns:
-        final_pool = final_pool.drop_duplicates(
-            subset=["ai_text", "human_text"]
-        )
+    hu_lower = final_pool["Human Text"].astype(str).str.lower().str.replace(r"\s+", " ", regex=True)
+    final_pool = final_pool.loc[~hu_lower.duplicated()].copy()
 
     if len(final_pool) >= 10:
         train, temp = train_test_split(
             final_pool,
             test_size=0.20,
             random_state=args.seed,
+            stratify=final_pool["category"] if final_pool["category"].nunique() > 1 else None,
         )
         validation, test = train_test_split(
             temp,
             test_size=0.50,
             random_state=args.seed,
+            stratify=temp["category"] if temp["category"].nunique() > 1 else None,
         )
     else:
         train = final_pool.copy()
@@ -212,7 +139,9 @@ def main() -> None:
         "train.csv",
         "validation.csv",
         "test.csv",
-        "manual_review.csv",
+        "train_normalized.csv",
+        "validation_normalized.csv",
+        "test_normalized.csv",
         "final_report.txt",
     ]
 
@@ -231,49 +160,47 @@ def main() -> None:
 
     df.to_csv(out / "final_scored.csv", index=False)
     df[df["semantic_risk"]].to_csv(out / "semantic_risk.csv", index=False)
-    df[
-        df["semantic_status"].isin(["REVIEW", "CONTRADICTION"])
-    ].to_csv(out / "manual_review.csv", index=False)
 
     train.to_csv(out / "train.csv", index=False)
     validation.to_csv(out / "validation.csv", index=False)
     test.to_csv(out / "test.csv", index=False)
 
-    report = f"""Lagom finalization report
+    train.to_csv(out / "train_normalized.csv", index=False)
+    validation.to_csv(out / "validation_normalized.csv", index=False)
+    test.to_csv(out / "test_normalized.csv", index=False)
+
+    tier_counts = final_pool["quality_tier"].value_counts()
+    report = f"""Lagom V2 finalization report
 ===========================
 
-Input/core rows: {len(base)}
-Semantic-risk rows: {int(df["semantic_risk"].sum())}
-Final training pool: {len(final_pool)}
-Train: {len(train)}
-Validation: {len(validation)}
-Test: {len(test)}
+Input rows: {len(df)}
+Pruned semantic/length risk rows: {int(df["semantic_risk"].sum())}
+Final clean training pool: {len(final_pool)}
+Train (80%): {len(train)}
+Validation (10%): {len(validation)}
+Test (10%): {len(test)}
 
-Semantic risk breakdown:
-- SBERT very-low signal (< {args.sbert_low}): {int(very_low_sbert.sum())}
-- SBERT+TF-IDF weak combined signal: {int(weak_both.sum())}
-- NLI contradiction signal (>= {args.nli_contradiction}): {int(nli_contradiction.sum())}
+Pruning breakdown:
+- SBERT low (< {args.sbert_low}): {int(low_sbert.sum())}
+- NLI contradiction signal (> {args.nli_contradiction}): {int(high_contradiction.sum())}
+- Length ratio outside [{args.min_ratio}, {args.max_ratio}]: {int(bad_ratio.sum())}
+- Dropped duplicates: {len(df[~df["semantic_risk"]]) - len(final_pool)}
 
-NLI diagnostic:
-- High entailment signal (>= 0.70): {int((df["nli_entailment_prob"] >= 0.70).sum())}
-- Low entailment, informational only (< 0.50): {int((df["nli_entailment_prob"] < 0.50).sum())}
+Quality tier distribution (rebuilt from scoring signals):
+{tier_counts.to_string()}
 
-Signals used:
-- SBERT sentence similarity: primary semantic similarity signal
-- TF-IDF lexical similarity: supporting lexical-overlap signal
-- NLI entailment/neutral/contradiction: diagnostic; contradiction can flag risk
-- Deterministic style/quality signals from improvements2.py
+Semantic score stats (composite SBERT/NLI/TF-IDF):
+  mean:  {df['semantic_score'].mean():.4f}
+  median:{df['semantic_score'].median():.4f}
+  min:   {df['semantic_score'].min():.4f}
+  max:   {df['semantic_score'].max():.4f}
 
-IMPORTANT:
-NLI low entailment is NOT an automatic rejection rule.
-A low NLI entailment score can occur for valid paraphrases.
-Thresholds are screening heuristics, not proof of meaning preservation.
-Inspect semantic_risk.csv and manual_review.csv before training.
+Category balance in final train pool:
+{final_pool['category'].value_counts().to_string()}
 
 Backup: {backup if backup else 'none'}
 """
     (out / "final_report.txt").write_text(report, encoding="utf-8")
-
     print(report)
 
 

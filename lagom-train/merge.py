@@ -8,9 +8,6 @@ import argparse
 import json
 import os
 
-from common import hf_base_name
-
-
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--adapter", default="outputs/adapter")
@@ -22,7 +19,7 @@ def main():
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     with open(os.path.join(a.adapter, "lagom_run.json")) as f:
-        base = hf_base_name(json.load(f)["base_model"])
+        base = json.load(f)["base_model"]
     print(f"Merging {a.adapter} into {base} ...")
     model = AutoModelForCausalLM.from_pretrained(base, torch_dtype=torch.float16, device_map={"": "cpu"})
     model = PeftModel.from_pretrained(model, a.adapter).merge_and_unload()

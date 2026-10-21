@@ -8,11 +8,6 @@ node_modules/
 .next/
 out/
 
-# Datasets & Large Files
-*.csv
-*.jsonl
-processed_data/
-
 # Environment & Local
 .env
 .env.*
@@ -22,8 +17,51 @@ processed_data/
 .vscode/
 .idea/
 
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
+# ── Datasets & Large CSV/JSONL files ─────────────────────────────────────────
+*.csv
+*.jsonl
+*.parquet
+*.arrow
 
+# Specific data folders (keep scripts, ignore generated data)
+Data/improved_data/
+Data/Collection/raw/
+processed_data/
+
+# ── Model weights & adapters ──────────────────────────────────────────────────
+# HuggingFace / safetensors weights
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.gguf
+*.ggml
+
+# Adapter & checkpoint directories
+lagom-train/outputs/
+lagom-train/outputs_*/
+
+# Merged / exported models
+lagom-train/merged/
+lagom-train/exported/
+
+# ── Training artefacts ────────────────────────────────────────────────────────
+# Trainer state and optimizer states (huge, not needed for reproducibility)
+optimizer.pt
+scheduler.pt
+trainer_state.json
+training_args.bin
+rng_state*.pth
+
+# TensorBoard / wandb logs
+runs/
+wandb/
+mlruns/
+
+# ── Misc large / generated ────────────────────────────────────────────────────
+*.log
+*.tmp
+*.bak
+*.zip
+*.tar.gz
+*.7z

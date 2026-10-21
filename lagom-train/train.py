@@ -15,7 +15,7 @@ import os
 import time
 
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "backend:native")
 
 from common import PRESETS, build_messages  # noqa: E402
 from data import load_pairs, split_pairs, encode  # noqa: E402
@@ -52,7 +52,7 @@ def parse_args():
     p.add_argument("--grad-accum", type=int, default=None)
     p.add_argument("--lora-r", type=int, default=None)
     p.add_argument("--lr", type=float, default=2e-4)
-    p.add_argument("--epochs", type=float, default=1.0)
+    p.add_argument("--epochs", type=float, default=3.0)
     p.add_argument("--save-steps", type=int, default=200)
     p.add_argument("--max-samples", type=int, default=None, help="Use only N training rows (smoke test)")
     p.add_argument("--resume", action="store_true", help="Resume from latest checkpoint in output-dir")
@@ -151,7 +151,7 @@ def main():
         optim="paged_adamw_8bit", bf16=bf16, fp16=not bf16,
         logging_steps=10, save_strategy="steps", save_steps=args.save_steps, save_total_limit=2,
         eval_steps=args.save_steps, prediction_loss_only=True,
-        group_by_length=True, report_to="none", seed=args.seed,
+        report_to="none", seed=args.seed,
         gradient_checkpointing=True,
         gradient_checkpointing_kwargs={"use_reentrant": False},
         remove_unused_columns=False,

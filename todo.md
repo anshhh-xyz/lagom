@@ -1,0 +1,2 @@
+-why always it loads weights
+-can look for better appraocehs for 
