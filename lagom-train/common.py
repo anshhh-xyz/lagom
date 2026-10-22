@@ -21,6 +21,8 @@ SYSTEM_PROMPT = (
     "naturalness; do not summarize, expand, or change the author's position unless "
     "the user explicitly asks for that.\n\n"
     "PRESERVATION RULES:\n"
+    "- Do not summarize, condense, or omit paragraphs. Preserve the full length and detail (~1:1 word count).\n"
+    "- Do not invent titles, headings, or section labels if none exist in the source text.\n"
     "- Preserve all material claims, reasoning, qualifications, uncertainty, and intent.\n"
     "- Preserve names, dates, numbers, units, technical terms, equations, quotations, "
     "citations, footnotes, and existing URLs. Do not invent or silently remove them.\n"
@@ -33,39 +35,40 @@ SYSTEM_PROMPT = (
     "- Avoid repetitive phrasing and formulaic transitions, but do not change wording "
     "merely to make it different.\n"
     "- If the input is ambiguous or incomplete, do not guess or complete missing text.\n"
-    "Return only the rewritten text, without commentary or a preamble."
+    "Return only the rewritten text, without commentary, preambles, or unprompted titles."
 )
 
 
 CATEGORY_INSTRUCTIONS: dict[str, str] = {
     "general": (
         "Rewrite the text in clear, natural language. Match its existing tone and "
-        "level of formality; retain the original details and structure."
+        "level of formality; retain all original details, paragraphs, and structure. "
+        "Do not summarize, shorten, or compress the text; do not add unprompted titles or headers."
     ),
     "essay": (
-        "Rewrite the essay with natural sentence flow while preserving its thesis, "
-        "arguments, evidence, qualifications, and conclusion. Do not invent evidence "
-        "or strengthen claims beyond the source."
+        "Rewrite the essay with natural sentence flow while preserving its thesis, full "
+        "arguments, evidence, qualifications, and conclusion. Do not summarize, shorten, or "
+        "drop paragraphs; do not add an essay title or reference list unless present in the source."
     ),
     "academic": (
         "Rewrite the academic text with fluent scholarly prose. Preserve technical "
         "precision, terminology, citations, equations, claims, and the author's degree "
-        "of certainty. Do not make the text more casual."
+        "of certainty. Do not summarize, compress, or make the text casual; do not invent citations."
     ),
     "email": (
         "Rewrite the email naturally for its apparent audience. Preserve its purpose, "
         "requests, commitments, names, dates, subject line, greeting, sign-off, and "
-        "professionalism when present. Do not invent email headers or disclaimers."
+        "professionalism. Do not condense or summarize; do not invent email headers or disclaimers."
     ),
     "document": (
         "Rewrite the document or report while preserving headings, section order, "
         "lists, tables, references, and factual detail. Do not turn it into a summary "
-        "or remove structural elements merely to make the prose shorter."
+        "or remove structural elements merely to make the prose shorter; do not add unprompted headers."
     ),
     "auto": (
         "Infer the text's likely genre and audience from the input, then rewrite in a "
-        "style appropriate to that genre. If the genre is ambiguous, retain the source's "
-        "existing tone and structure rather than imposing a new style."
+        "style appropriate to that genre. Preserve the source's full length, paragraphs, tone, "
+        "and structure (~1:1 word count) without summarizing, condensing, or adding titles."
     ),
 }
 
@@ -113,10 +116,41 @@ def build_messages(
     ]
 
 
+def clean_humanized_output(generated: str, source_text: str = "") -> str:
+    """Clean unprompted injected titles or headers not present in source text."""
+    import re
+    gen = generated.strip()
+    source_lower = source_text.lower() if source_text else ""
+
+    # Strip multiline title: "Title: ...\n" or "... Essay\n"
+    lines = gen.split("\n", 1)
+    if len(lines) > 1:
+        first_line = lines[0].strip().rstrip(":").rstrip(".")
+        if len(first_line.split()) <= 10:
+            is_title = (
+                first_line.lower().startswith("title:")
+                or first_line.lower().endswith(" essay")
+                or first_line.lower().endswith(" research paper")
+                or first_line.lower().endswith(" paper")
+                or first_line.lower().endswith(" report")
+            )
+            if is_title and (not source_lower or first_line.lower() not in source_lower):
+                gen = lines[1].strip()
+
+    # Strip inline title: "Technology and Human Experience Essay In today's world..."
+    m = re.match(r"^([A-Z][A-Za-z0-9\s,'-]{2,60}?\b(?:Essay|Research Paper|Paper|Report))\s+([A-Z].+)", gen, flags=re.DOTALL)
+    if m:
+        candidate_title = m.group(1).strip()
+        if not source_lower or candidate_title.lower() not in source_lower:
+            gen = m.group(2).strip()
+
+    return gen
+
+
 PRESETS = {
     "local8gb": {
         "model": "Qwen/Qwen2.5-3B-Instruct",
-        "max_seq_len": 1536,
+        "max_seq_len": 1280,
         "batch_size": 1,
         "grad_accum": 16,
         "lora_r": 32,
@@ -126,7 +160,7 @@ PRESETS = {
         # Keep the same base model for comparable experiments. Change this only
         # if you intentionally want to benchmark a larger model on Kaggle.
         "model": "Qwen/Qwen2.5-3B-Instruct",
-        "max_seq_len": 1536,
+        "max_seq_len": 1280,
         "batch_size": 1,
         "grad_accum": 16,
         "lora_r": 32,

@@ -17,7 +17,7 @@ train_pkg_dir = os.path.join(script_dir, "..", "lagom-train")
 if os.path.exists(train_pkg_dir) and train_pkg_dir not in sys.path:
     sys.path.append(train_pkg_dir)
 
-from common import CATEGORY_INSTRUCTIONS, build_messages  # noqa: E402
+from common import CATEGORY_INSTRUCTIONS, build_messages, clean_humanized_output  # noqa: E402
 
 app = FastAPI(
     title="Lagom Humanizer API",
@@ -57,10 +57,10 @@ class ModelHolder:
             candidates.append(os.environ.get("LAGOM_MERGED_PATH"))
 
         candidates.extend([
-            os.path.join(train_pkg_dir, "outputs", "merged"),
-            os.path.join(script_dir, "..", "outputs", "merged"),
             os.path.join(train_pkg_dir, "outputs", "adapter"),
             os.path.join(script_dir, "..", "outputs", "adapter"),
+            os.path.join(train_pkg_dir, "outputs", "merged"),
+            os.path.join(script_dir, "..", "outputs", "merged"),
             os.path.join(train_pkg_dir, "outputs_smoke", "adapter"),
             os.path.join(script_dir, "..", "outputs_smoke", "adapter"),
         ])
@@ -288,6 +288,7 @@ def humanize(req: HumanizeRequest):
             use_cache=True,
         )
     gen = tok.decode(out[0][inp["input_ids"].shape[1]:], skip_special_tokens=True).strip()
+    gen = clean_humanized_output(gen, req.text)
     elapsed = round(time.time() - t0, 3)
 
     return HumanizeResponse(

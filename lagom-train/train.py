@@ -15,7 +15,7 @@ import os
 import time
 
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "backend:native")
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 from common import PRESETS, build_messages  # noqa: E402
 from data import load_pairs, split_pairs, encode  # noqa: E402
@@ -51,6 +51,7 @@ def parse_args():
     p.add_argument("--batch-size", type=int, default=None)
     p.add_argument("--grad-accum", type=int, default=None)
     p.add_argument("--lora-r", type=int, default=None)
+    p.add_argument("--lora-alpha", type=int, default=None)
     p.add_argument("--lr", type=float, default=2e-4)
     p.add_argument("--epochs", type=float, default=3.0)
     p.add_argument("--save-steps", type=int, default=200)
@@ -102,6 +103,7 @@ def main():
         use_gradient_checkpointing=True,
         gradient_checkpointing_kwargs={"use_reentrant": False},
     )
+    print(f"LoRA config: r={args.lora_r}, alpha={args.lora_alpha}")
     model = get_peft_model(model, LoraConfig(
         r=args.lora_r, lora_alpha=args.lora_alpha, lora_dropout=0.0, bias="none", task_type="CAUSAL_LM",
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],

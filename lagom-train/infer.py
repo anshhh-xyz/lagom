@@ -10,7 +10,7 @@ import json
 import os
 import sys
 
-from common import build_messages
+from common import build_messages, clean_humanized_output
 
 
 def main():
@@ -63,7 +63,8 @@ def main():
     with torch.no_grad():
         out = model.generate(**inp, max_new_tokens=a.max_new_tokens, do_sample=True, temperature=a.temperature,
                              top_p=a.top_p, repetition_penalty=a.repetition_penalty, use_cache=True)
-    print(tok.decode(out[0][inp["input_ids"].shape[1]:], skip_special_tokens=True).strip())
+    gen = tok.decode(out[0][inp["input_ids"].shape[1]:], skip_special_tokens=True).strip()
+    print(clean_humanized_output(gen, text))
 
 
 if __name__ == "__main__":

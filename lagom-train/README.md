@@ -119,16 +119,77 @@ python train.py --preset local8gb --max-samples 100 --epochs 1 --output-dir outp
 ```
 
 ### 2. Full Training Run
-Train on all ~22,400 curated pairs:
+Train with LoRA rank `r=32` and `alpha=64`:
 ```powershell
-python train.py --preset local8gb --epochs 1 --output-dir outputs
+python train.py --preset local8gb --epochs 3 --output-dir outputs
 ```
-* **VRAM**: ~4.8 GB – 5.5 GB (safe under 8.0 GB).
-* **Duration**: ~35–45 minutes for 1 epoch.
+* **LoRA Capacity**: `r=32`, `lora_alpha=64` across all 7 linear projections (`q, k, v, o, gate, up, down`), providing double the representational capacity of r=16 to prevent register collapse.
+* **VRAM**: ~5.2 GB – 5.8 GB (well within 8.0 GB limit).
 * **Resume if interrupted**:
   ```powershell
   python train.py --preset local8gb --resume --output-dir outputs
   ```
+
+### 3. Dataset Audit & Length Ratio Check
+* **Audit & extract all short pairs (< 0.70 ratio):**
+  ```powershell
+  python ../Data/Preprocessing/audit_length_ratios.py --min-ratio 0.70
+  ```
+* **Full Batch Regeneration (Processes all 4,706 flagged pairs or 3,741 in train):**
+  Uses both **Groq** (`qwen3.8-27b`) and **Gemini** (`gemini-3.5-flash-lite`), rotating through all available API keys (`GROQ_API_KEY_1..4`, `GEMINI_API_KEY_1..3`), with real-time **SBERT cosine similarity scoring** on GPU:
+  ```powershell
+  # Process all remaining train pairs with auto provider rotation & SBERT validation:
+  python ../Data/Preprocessing/regenerate_short_pairs.py --split train
+
+  # Process all 4,706 pairs across all splits (train, validation, test):
+  python ../Data/Preprocessing/regenerate_short_pairs.py --split all
+
+  # Fast run focused specifically on essays:
+  python ../Data/Preprocessing/regenerate_short_pairs.py --category essay --provider auto
+  ```
+  *(Checkpoints are saved to `Data/improved_data/regenerated_cache.csv` every 5 pairs, making it completely safe to pause and resume anytime).*
+
+* **Apply regenerated pairs & purge remaining truncated pairs (< 0.70 ratio):**
+  ```powershell
+  python ../Data/Preprocessing/clean_and_replace_pairs.py --min-ratio 0.70
+  ```
+  *(Creates a safety backup, merges all regenerated 1:1 rewrites, and purges remaining short rows so training has zero summarization bias).*
+
+---
+
+## 🛠️ Recent Improvements & Architecture Updates (v2.1)
+
+### What Was Done
+1. **LoRA Capacity Boost ($r=32, \alpha=64$):**
+   - Upgraded adapter rank from $r=16$ to $r=32$ ($\alpha=64$) across all 7 linear projection layers (`q_proj`, `k_proj`, `v_proj`, `o_proj`, `gate_proj`, `up_proj`, `down_proj`).
+   - Doubled trainable adapter parameters (~20M → ~40M), providing capacity to retain intellectual vocabulary while restructuring syntax.
+   - Added CLI arguments `--lora-r` and `--lora-alpha` to `train.py` with runtime logging.
+2. **Dataset Length Ratio Audit:**
+   - Audited length ratios ($\frac{\text{Human Words}}{\text{AI Words}}$) across train, validation, and test datasets.
+   - Discovered that **43.7% of all Essay pairs** and **30.7% of Academic pairs** in the training set had ratios $< 0.70$ (mean ratio $0.78$), causing the model to learn unwanted summarization.
+   - Extracted all 4,706 short pairs ($< 0.70$) into `Data/improved_data/pairs_for_reevaluation.csv`.
+3. **High-Register, Length-Balanced Pair Generation & Batch Replacement:**
+   - Generated curated pairs with strict 1:1 length ratios ($0.97 - 1.12$) focusing on `essay`, `academic`, and `document` styles.
+   - Built automated batch regenerator `regenerate_short_pairs.py` to rewrite short pairs via Gemini and replace them when ratio $\ge 0.85$.
+   - Built `clean_and_replace_pairs.py` which purged 3,741 remaining truncated rows, leaving 8,050 pristine, non-summarizing training pairs (mean ratio raised from 0.78 to 0.84).
+
+### Why It Was Done
+* **Root Cause 1 — Register Collapse:** The previous model dumbed down sophisticated vocabulary (e.g., turning *"sophisticated digital infrastructure"* into generic *"technology"*). Increasing to $r=32$ gives the model sufficient capacity to preserve high-register diction.
+* **Root Cause 2 — Unwanted Summarization:** The model dropped 20–30% of content because nearly a third of the training pairs had human rewrites that were truncated or truncated mid-sentence.
+
+### Files Created & Modified
+* ✏️ `lagom-train/common.py`: Set default presets to `lora_r=32, lora_alpha=64`.
+* ✏️ `lagom-train/train.py`: Added `--lora-alpha` CLI flag and runtime LoRA config logging.
+* ➕ `Data/Preprocessing/audit_length_ratios.py`: Script to audit word counts, percentiles, and extract short pairs.
+* ➕ `Data/Preprocessing/generate_high_quality_pairs.py`: Script to create and append high-register, 1:1 ratio pairs.
+* ➕ `Data/Preprocessing/regenerate_short_pairs.py`: Automated batch regenerator that rewrites short pairs via Gemini and replaces them with 1:1 length ratio rewrites.
+* ➕ `Data/Preprocessing/clean_and_replace_pairs.py`: Applies regenerated pairs and purges truncated rows from `train_normalized.csv`.
+* 📄 `Data/improved_data/pairs_for_reevaluation.csv`: 4,706 flagged pairs ($< 0.70$ ratio) requiring re-evaluation.
+* 📄 `Data/improved_data/regenerated_cache.csv`: Caching file tracking regenerated pairs and new length ratios.
+* 📄 `Data/improved_data/new_high_quality_pairs.csv`: Curated 1:1 ratio pairs.
+* ✏️ `Data/improved_data/train_normalized.csv`: Cleaned dataset (8,050 rows, zero $<0.70$ pairs, mean ratio 0.84).
+* 📄 `Data/improved_data/train_normalized.backup_11791.csv`: Safety backup of original dataset.
+* ✏️ `lagom-train/README.md`: Updated documentation and guides.
 
 ---
 
