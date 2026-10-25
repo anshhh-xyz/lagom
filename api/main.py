@@ -252,6 +252,85 @@ def get_styles():
     }
 
 
+
+def chunk_paragraphs(text: str, min_words: int = 150, max_words: int = 300) -> list[str]:
+    """Split input on blank lines, merging short paragraphs to ~150-300 words."""
+    raw_paras = [p.strip() for p in re.split(r'\n\s*\n+', text.strip()) if p.strip()]
+    if not raw_paras:
+        return [text] if text.strip() else []
+
+    chunks = []
+    curr = []
+    curr_words = 0
+
+    for p in raw_paras:
+        pw = len(p.split())
+        if curr and (curr_words + pw > max_words) and (curr_words >= min_words):
+            chunks.append("\n\n".join(curr))
+            curr = [p]
+            curr_words = pw
+        else:
+            curr.append(p)
+            curr_words += pw
+
+    if curr:
+        chunks.append("\n\n".join(curr))
+
+    return chunks
+
+
+def humanize_chunk_sync(
+    model,
+    tok,
+    chunk: str,
+    style: str,
+    temperature: float = 0.7,
+    top_p: float = 0.9,
+    max_new_tokens: int = 900,
+    min_ratio: float = 0.70,
+    max_ratio: float = 0.95,
+    target_ratio: float = 0.85,
+    max_attempts: int = 3,
+) -> str:
+    """Inference guard: ensures output/input words ratio is within 0.70-0.95, resampling up to 3 times."""
+    import torch
+    in_words = len(chunk.split())
+    if in_words == 0:
+        return ""
+
+    prompt = tok.apply_chat_template(
+        build_messages(chunk, style=style),
+        tokenize=False,
+        add_generation_prompt=True,
+    )
+
+    candidates = []
+    for attempt in range(max_attempts):
+        inp = tok(prompt, return_tensors="pt", add_special_tokens=False).to(model.device)
+        with torch.no_grad():
+            out = model.generate(
+                **inp,
+                max_new_tokens=max_new_tokens,
+                do_sample=True,
+                temperature=temperature,
+                top_p=top_p,
+                repetition_penalty=1.05,
+                use_cache=True,
+            )
+        gen = tok.decode(out[0][inp["input_ids"].shape[1]:], skip_special_tokens=True).strip()
+        cleaned = clean_humanized_output(gen, chunk)
+        out_words = len(cleaned.split())
+        ratio = out_words / max(in_words, 1)
+        candidates.append((cleaned, ratio, abs(ratio - target_ratio)))
+
+        if min_ratio <= ratio <= max_ratio:
+            return cleaned
+
+    # Return the candidate closest to target_ratio (0.85)
+    candidates.sort(key=lambda x: x[2])
+    return candidates[0][0]
+
+
 @app.post("/api/humanize", response_model=HumanizeResponse)
 def humanize(req: HumanizeRequest):
     if not req.text.strip():
@@ -267,38 +346,37 @@ def humanize(req: HumanizeRequest):
             ),
         )
 
-    import torch
     t0 = time.time()
     tok = holder.tokenizer
     model = holder.model
-    prompt = tok.apply_chat_template(
-        build_messages(req.text, style=req.style),
-        tokenize=False,
-        add_generation_prompt=True,
-    )
-    inp = tok(prompt, return_tensors="pt", add_special_tokens=False).to(model.device)
-    with torch.no_grad():
-        out = model.generate(
-            **inp,
-            max_new_tokens=req.max_new_tokens,
-            do_sample=True,
+
+    chunks = chunk_paragraphs(req.text, min_words=150, max_words=300)
+    humanized_chunks = []
+    total_tokens = 0
+
+    for chunk in chunks:
+        out_chunk = humanize_chunk_sync(
+            model=model,
+            tok=tok,
+            chunk=chunk,
+            style=req.style,
             temperature=req.temperature,
             top_p=req.top_p,
-            repetition_penalty=1.05,
-            use_cache=True,
+            max_new_tokens=req.max_new_tokens,
         )
-    gen = tok.decode(out[0][inp["input_ids"].shape[1]:], skip_special_tokens=True).strip()
-    gen = clean_humanized_output(gen, req.text)
+        humanized_chunks.append(out_chunk)
+
+    final_text = "\n\n".join(humanized_chunks)
     elapsed = round(time.time() - t0, 3)
 
     return HumanizeResponse(
-        humanized=gen,
+        humanized=final_text,
         style=req.style,
-        tokens=out.shape[1] - inp["input_ids"].shape[1],
+        tokens=len(final_text.split()),
         elapsed_seconds=elapsed,
         model_mode=f"local_{holder.model_type}",
         word_count_original=len(req.text.split()),
-        word_count_humanized=len(gen.split()),
+        word_count_humanized=len(final_text.split()),
     )
 
 
